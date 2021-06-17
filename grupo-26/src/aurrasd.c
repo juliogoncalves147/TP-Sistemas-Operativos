@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
-#include <string.h>
+#include <errno.h>
 
 //Estrutura de dados para gerir os Filtros Existentes e sua utilização
 typedef struct filtros{
@@ -59,6 +59,8 @@ int numisFilter(char** comandos, FILTROS filtros[]){
     return cont;
 }
 
+
+
 // Função que executa a filtragem de uma musica aquando da chamada do comando transform pelo cliente.
 // config_filename - diretoria onde esta o ficheiro de configuração de filtros
 // filters_folder - diretoria onde se encontram os executaveis dos filtos
@@ -75,6 +77,7 @@ int numisFilter(char** comandos, FILTROS filtros[]){
 char* filter_diretory(char* filter, FILTROS filtros[]){
     int i = 0;
     int val = 0;
+
     while(i < filtros[0]->numero_filtros && val == 0){
         if(strcmp(filter, filtros[i]->filtro_name) == 0) val = 1;
         i++;
@@ -84,13 +87,51 @@ char* filter_diretory(char* filter, FILTROS filtros[]){
     else return NULL;
 }
 
+void atualiza_filtros(char* filter, FILTROS filtros[]){
+    int i = 0;
+    int val = 0;
+    while(i < filtros[0]->numero_filtros && val == 0){
+        if(strcmp(filter, filtros[i]->filtro_name) == 0) {
+             val = 1;
+             filtros[i]->used++; // atualizar isto depois  para impedir que se atualize estando no maximo
+        }
+        i++;
+    }
+}
+
+void liberta_filtros(char* comandos[], int numero, FILTROS filtros[]){
+    int i = 0;
+    int val = 0;
+    for(int a = 0; a < numero; a++){
+        i = 0;
+        val = 0;
+        while(i < filtros[0]->numero_filtros && val == 0){
+            if(strcmp(comandos[a], filtros[i]->filtro_name) == 0){
+                val = 1;
+                if(filtros[i]->used > 0) filtros[i]->used--;
+            }
+            i++;
+        }
+    }
+}
+
+
+
 // Função de execução do comando transform
 void exec_transform(char* config_filename, char* filters_folder, char** comandos, FILTROS filtros[]){
 
     int numFilters = numisFilter(comandos, filtros); // numero de filtros a serem aplicados à musica dada
     
     int fi = open(comandos[1], O_RDONLY);   // descritor musica a ser tratada
+    if(fi == -1){
+        perror("Musica de input não existe!");
+        return;
+    }
     int fo = open(comandos[2], O_WRONLY | O_CREAT | O_TRUNC, 0644); // descritor da musica final
+    if(fo == -1){
+        perror("Erro ao criar ficheiro de output");
+        return;
+    }
 
     dup2(fi, 0);  // redirecionamentos
     dup2(fo, 1);
@@ -100,7 +141,7 @@ void exec_transform(char* config_filename, char* filters_folder, char** comandos
 
     int fd[2];
     int i;
-    for(i = 0; i < numFilters - 1; i++) {  // execução dos vários filtros seguidos
+    for(i = 0; i < numFilters - 1; i++){  // execução dos vários filtros seguidos
         int pipe_ret = pipe(fd);
         if(pipe_ret == -1){
             perror("Problema ao criar o pipe!");
@@ -121,7 +162,9 @@ void exec_transform(char* config_filename, char* filters_folder, char** comandos
              } 
              strcat(diretoria, exec_filter);          // fazer função para atribuir as diretorias dos executaveis aos respetivos nomes dos filtros
              execl(diretoria, diretoria, NULL);
-        } else { 
+             _exit(0);
+        } else {    
+             atualiza_filtros(comandos[3+i], filtros);
              dup2(fd[0], 0);
              close(fd[0]);
              close(fd[1]);
@@ -129,17 +172,21 @@ void exec_transform(char* config_filename, char* filters_folder, char** comandos
     }    
     // ultimo caso, redirecionamento para o ficheiro de output
     if(fork() == 0){
-    char* diretoria = malloc(1024);
-    strcpy(diretoria, filters_folder);
-    strcat(diretoria, "/");
-    char* exec_filter = filter_diretory(comandos[3+i], filtros);
-    if (exec_filter == NULL){
+        char* diretoria = malloc(1024);
+        strcpy(diretoria, filters_folder);
+        strcat(diretoria, "/");
+        char* exec_filter = filter_diretory(comandos[3+i], filtros);
+        if (exec_filter == NULL){
             perror("Filtro nao existente");
             return;
-    } 
-    strcat(diretoria, exec_filter);
-    execl(diretoria, diretoria, NULL);
+        } 
+        strcat(diretoria, exec_filter);
+        execl(diretoria, diretoria, NULL);  
+        _exit(0);
+    } else {
+        atualiza_filtros(comandos[3+i], filtros);
     }
+
 }
 
 // Função para contar o numero de filtros definidos no conf com base em \n
@@ -194,8 +241,18 @@ FILTROS* initFiltros(char* config_filename){
     return filtros;
 }
 
-void exec_status(FILTROS filtros[]){ // Incompleto, falta meter as tasks em processamento
+void exec_status(FILTROS filtros[]){ // Incompleto, falta meter as tasks em processamento e voltar a enviar isto para o filho.
     int i = 0;
+
+    if ((mkfifo("bin/servertocliente", 0777)) == -1) { // criação do fifo de comunição
+		    if(errno != EEXIST){	    
+		 	  write(1, "Could Not Creat The FIFO\n", 26);
+		  	  return;
+		    }
+	    }
+    
+    int fd = open("bin/servertocliente", O_WRONLY);
+
     while(i < filtros[0]->numero_filtros){
         char comando[2000] = "";
         strcat(comando, "filter");
@@ -212,9 +269,19 @@ void exec_status(FILTROS filtros[]){ // Incompleto, falta meter as tasks em proc
         strcat(comando, " ");
         strcat(comando, "(running/max)");
         strcat(comando, "\n");
-        write(1, comando, strlen(comando));
+
+        if((write(fd, comando, strlen(comando)+1)) == -1){
+		    write(1, "Could Not Write To The FIFO 'servertocliente'\n", 26);
+	   	    return;
+	    }
+
         i++;
     }
+    int pi = getpid();
+    char buffer[10];
+    sprintf(buffer, "pid: %d \n", pi);
+    write(fd, buffer, strlen(buffer));
+    close(fd);
 }
 
 int main (int argc, char * argv[]){ 
@@ -228,7 +295,6 @@ int main (int argc, char * argv[]){
     char* config_filename = strdup(argv[1]);
     char* filters_folder = strdup(argv[2]);
     
-        
     FILTROS *filtros = initFiltros(config_filename);  // isto tem que se alterar pois aqui ainda nao sabemos quantos filtros iremos ter
                                          // inicialização dos filtors
 
@@ -237,7 +303,8 @@ int main (int argc, char * argv[]){
     char* buffer = malloc(1024);
     int bytes_read = 0;
     
-    while(1){                                       // ciclo infinito em que o servidor vai estar constantemente a ler do fifo
+    while(1){ 
+                                              // ciclo infinito em que o servidor vai estar constantemente a ler do fifo
     int fd = open("bin/clientetoserver", O_RDONLY);
     bytes_read = read(fd, buffer, 1024);
 
@@ -245,6 +312,7 @@ int main (int argc, char * argv[]){
         char** comandos = inputDivide(buffer); // duas possiveis chamadas ao servidor
                                                // a aplicação de filtros a uma musica
         if (strcmp(comandos[0], "transform") == 0) exec_transform(config_filename, filters_folder, comandos, filtros);
+
                                                // quando o cliente pede o status do servidor
       
         if (strcmp(comandos[0], "status") == 0) exec_status(filtros); // fazer este comando
@@ -252,6 +320,7 @@ int main (int argc, char * argv[]){
         free(comandos);
        }
     }
+    
     
     return 0;
 }

@@ -39,18 +39,24 @@ int main (int argc, char * argv[]){
     else if(strcmp("status", argv[1]) == 0 && argc == 2) { // comando em que pedidmos o status do servidor
 	    // codigo status servidor 
 	    if (mkfifo("bin/clientetoserver", 0777) == -1) { // criação do fifo de comunição
-		    if( errno != EEXIST){	    
+		    if(errno != EEXIST){	    
 		 	  write(1, "Could Not Creat The FIFO\n", 26);
 		  	  return 0;
 		    }
 	    } 
 
-	    
-
 	    int fd = open("bin/clientetoserver", O_WRONLY); // escreve para o fifo
 	    if((write(fd, argv[1], strlen(argv[1])+1)) == -1){
-		    write(1, "Could Not Write To The FIFO\n", 26);
+		    write(1, "Could Not Write To The FIFO 'clientetoserver'\n", 26);
 	   	    return 0;
+	    }
+	    close(fd);
+	    int bytes_read;
+	    char buffer[1024];
+	    fd = open("bin/servertocliente", O_RDONLY);
+
+    	    while((bytes_read = read(fd, buffer, 1024)) > 0){
+	    	  write(1, buffer, bytes_read);
 	    }
 	    close(fd);
     }
