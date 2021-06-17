@@ -18,6 +18,13 @@ typedef struct filtros{
     int numero_filtros; // numero de filtros que existem diferentes
 } *FILTROS;
 
+
+char* pendings[10];
+int pending;
+
+char* tasks[10];
+int task;
+
 // Função que divide o comando enviado pelo cliente num array de strings
 char **inputDivide(char *input)
 {
@@ -48,9 +55,18 @@ int isFilter(char* comando, FILTROS filtros[]){
     return val;
 }
 
+void inicializa_tasks(char** tasks){
+    int i = 0;
+    while(i < 10){
+        tasks[i] = NULL;
+        i++;
+    }
+    task = 0;
+}
+
 // Função que determina quantos filtros vão ser aplicados a um determinado input
 int numisFilter(char** comandos, FILTROS filtros[]){
-    int i = 3;
+    int i = 4;
     int cont = 0;
     while(comandos[i] != NULL){
         if(isFilter(comandos[i], filtros)) cont++;
@@ -68,9 +84,10 @@ int numisFilter(char** comandos, FILTROS filtros[]){
 /*
    Normalmente para esta funcao:
          comandos[0] -> "transform"
-         comandos[1] -> "input file name"
-         comandos[2] -> "output file name"
-         comandos[3] em diante -> nome dos filtros a aplicar
+         comandos[1] -> "pid do processo"
+         comandos[2] -> "input file name"
+         comandos[3] -> "output file name"
+         comandos[4] em diante -> nome dos filtros a aplicar
    */
 
 // Função que dado o nome do filtro retorna o nome do executavel
@@ -87,22 +104,44 @@ char* filter_diretory(char* filter, FILTROS filtros[]){
     else return NULL;
 }
 
-void atualiza_filtros(char* filter, FILTROS filtros[]){
+int atualiza_filtros(char* filter, FILTROS filtros[]){
     int i = 0;
     int val = 0;
     while(i < filtros[0]->numero_filtros && val == 0){
         if(strcmp(filter, filtros[i]->filtro_name) == 0) {
              val = 1;
-             filtros[i]->used++; // atualizar isto depois  para impedir que se atualize estando no maximo
+             if (filtros[i]->used >= filtros[i]->max_used) return 0; // atualizar isto depois  para impedir que se atualize estando no maximo
+             filtros[i]->used++;
         }
         i++;
     }
+    return 1;
 }
 
-void liberta_filtros(char* comandos[], int numero, FILTROS filtros[]){
+int testa_transform(char* comando[], FILTROS filtros[]){
+
+    int i = 0;
+    int val = 1;
+    
+    for(int a = 0; comando[a] != NULL && val == 1; a++){
+        i = 0;
+        while(i < filtros[0]->numero_filtros && val == 1){
+
+            if(strcmp(comando[a], filtros[i]->filtro_name) == 0){
+                if(filtros[i]->used >= filtros[i]->max_used) val = 0;
+            }
+            i++;
+        }
+    }
+
+    return val;
+}
+
+
+void liberta_filtros_tasks(char* config_filename, char* filters_folder, char* comandos[],FILTROS filtros[]){
     int i = 0;
     int val = 0;
-    for(int a = 0; a < numero; a++){
+    for(int a = 0; comandos[a] != NULL; a++){
         i = 0;
         val = 0;
         while(i < filtros[0]->numero_filtros && val == 0){
@@ -113,24 +152,53 @@ void liberta_filtros(char* comandos[], int numero, FILTROS filtros[]){
             i++;
         }
     }
+
+    val = 0;
+    int j;
+    for(j = 0; j < task && val == 0; j++){
+        if(strstr(tasks[j], comandos[0])) val = 1;    
+    }
+
+    
+    for(int l = j-1; l < task && val == 1; l++){
+          tasks[l] = tasks[l+1];// fazer isto para atualizar as tasks ao libertar.
+    }    
+    task--;
+
+    val = 0;
+    int k;
+    for(k = 0; k < pending && val == 0; k++){
+         char** com = inputDivide(pendings[k]);
+         if(testa_transform(com, filtros)){
+             transform_main(config_filename, filters_folder, com, filtros);
+             val = 1;
+         }         
+    }
+
+    while(val == 1 && k < pending){
+        pendings[k] = pendings[k+1];
+        k++;
+    }
+
+    if(val == 1) pending--;
 }
 
 
 
 // Função de execução do comando transform
-void exec_transform(char* config_filename, char* filters_folder, char** comandos, FILTROS filtros[]){
+int exec_transform(char* config_filename, char* filters_folder, char** comandos, FILTROS filtros[]){
 
     int numFilters = numisFilter(comandos, filtros); // numero de filtros a serem aplicados à musica dada
     
-    int fi = open(comandos[1], O_RDONLY);   // descritor musica a ser tratada
+    int fi = open(comandos[2], O_RDONLY);   // descritor musica a ser tratada
     if(fi == -1){
         perror("Musica de input não existe!");
-        return;
+        return 0;
     }
-    int fo = open(comandos[2], O_WRONLY | O_CREAT | O_TRUNC, 0644); // descritor da musica final
+    int fo = open(comandos[3], O_WRONLY | O_CREAT | O_TRUNC, 0644); // descritor da musica final
     if(fo == -1){
         perror("Erro ao criar ficheiro de output");
-        return;
+        return 0;
     }
 
     dup2(fi, 0);  // redirecionamentos
@@ -145,7 +213,7 @@ void exec_transform(char* config_filename, char* filters_folder, char** comandos
         int pipe_ret = pipe(fd);
         if(pipe_ret == -1){
             perror("Problema ao criar o pipe!");
-            return;
+            return -1;
         }
 
         if(fork() == 0){
@@ -155,39 +223,121 @@ void exec_transform(char* config_filename, char* filters_folder, char** comandos
              char* diretoria = malloc(1024);
              strcpy(diretoria, filters_folder);
              strcat(diretoria, "/");
-             char* exec_filter = filter_diretory(comandos[3+i], filtros); // vai a estrutura de dados buscar o nome do executavel
+             char* exec_filter = filter_diretory(comandos[4+i], filtros); // vai a estrutura de dados buscar o nome do executavel
              if (exec_filter == NULL){
                  perror("Filtro nao existente");
-                 return;
+                 return -1;
              } 
              strcat(diretoria, exec_filter);          // fazer função para atribuir as diretorias dos executaveis aos respetivos nomes dos filtros
              execl(diretoria, diretoria, NULL);
              _exit(0);
         } else {    
-             atualiza_filtros(comandos[3+i], filtros);
              dup2(fd[0], 0);
              close(fd[0]);
              close(fd[1]);
         }    
     }    
     // ultimo caso, redirecionamento para o ficheiro de output
-    if(fork() == 0){
+    int pid;
+    if((pid = fork()) == 0){
         char* diretoria = malloc(1024);
         strcpy(diretoria, filters_folder);
         strcat(diretoria, "/");
-        char* exec_filter = filter_diretory(comandos[3+i], filtros);
+        char* exec_filter = filter_diretory(comandos[4+i], filtros);
         if (exec_filter == NULL){
             perror("Filtro nao existente");
-            return;
+            return -1;
         } 
         strcat(diretoria, exec_filter);
         execl(diretoria, diretoria, NULL);  
         _exit(0);
-    } else {
-        atualiza_filtros(comandos[3+i], filtros);
     }
 
+    int status;
+    waitpid(pid, &status, 0);
+
+    return 0;
 }
+
+void insere_task(char** tasks, char** comandos){
+    int i = 0;
+    while(tasks[i] != NULL) i++;
+
+    char buffer[1024];
+    sprintf(buffer, "task #%d:", i);
+    int a = 0;
+    while(comandos[a]){  
+        strcat(buffer, " ");
+        strcat(buffer, comandos[a]);
+        a++;
+    }
+    strcat(buffer, "\n");
+
+    tasks[i] = strdup(buffer);
+    task++;
+}
+
+void inicializa_pendings(char** pendings){
+    int i = 0;
+    while(i < 10) pendings[i++] = NULL;
+
+    pending = 0;
+}
+
+void insere_pendings(char** comandos){
+
+    char* array = malloc(1024);
+    strcpy(array, "");
+    int a = 0;
+    while(comandos[a]){  
+        strcat(array, comandos[a]);
+        strcat(array, " ");
+        a++;
+    }
+
+    pendings[pending] = strdup(array);
+    pending++;
+}
+
+void transform_main(char* config_filename, char* filters_folder, char** comandos, FILTROS filtros[]){
+
+
+   if(testa_transform(comandos, filtros)){ 
+        insere_task(tasks, comandos);
+        int i = 4;
+        int test;
+        int val = 0;
+
+       while(comandos[i] != NULL && val == 0){
+           test = atualiza_filtros(comandos[i], filtros);
+           if (test == 0) val = 1;
+           i++;
+       }
+    
+       if (val == 0){
+       if (fork() == 0){
+          pid_t pid;
+          if((pid = fork()) == 0){
+             _exit(exec_transform(config_filename, filters_folder, comandos, filtros));
+           } else {
+
+           int status;
+           waitpid(pid, &status, 0);
+           if(WEXITSTATUS(status) == 0){
+                 kill(atoi(comandos[1]), SIGUSR1);
+           }
+           else kill(atoi(comandos[1]), SIGUSR2);
+           }
+           _exit(0);    
+        }
+       }
+      }
+      else {    
+          insere_pendings(comandos);
+      }
+}
+
+
 
 // Função para contar o numero de filtros definidos no conf com base em \n
 int numberFilters(char* filtros){
@@ -253,6 +403,12 @@ void exec_status(FILTROS filtros[]){ // Incompleto, falta meter as tasks em proc
     
     int fd = open("bin/servertocliente", O_WRONLY);
 
+    int a = 0;
+    while(tasks[a]){
+        write(fd, tasks[a], strlen(tasks[a]));
+        a++;
+    }
+
     while(i < filtros[0]->numero_filtros){
         char comando[2000] = "";
         strcat(comando, "filter");
@@ -297,7 +453,8 @@ int main (int argc, char * argv[]){
     
     FILTROS *filtros = initFiltros(config_filename);  // isto tem que se alterar pois aqui ainda nao sabemos quantos filtros iremos ter
                                          // inicialização dos filtors
-
+    inicializa_tasks(tasks);
+    inicializa_pendings(pendings);
       // abertura do fifo de comunicação
 
     char* buffer = malloc(1024);
@@ -311,16 +468,15 @@ int main (int argc, char * argv[]){
     if(bytes_read > 0){
         char** comandos = inputDivide(buffer); // duas possiveis chamadas ao servidor
                                                // a aplicação de filtros a uma musica
-        if (strcmp(comandos[0], "transform") == 0) exec_transform(config_filename, filters_folder, comandos, filtros);
+        if (strcmp(comandos[0], "transform") == 0) transform_main(config_filename, filters_folder, comandos, filtros);
 
-                                               // quando o cliente pede o status do servidor
+        if (strcmp(comandos[0], "free_filtros") == 0) liberta_filtros_tasks(config_filename, filters_folder, comandos+1, filtros);                                       // quando o cliente pede o status do servidor
       
         if (strcmp(comandos[0], "status") == 0) exec_status(filtros); // fazer este comando
         
         free(comandos);
        }
     }
-    
     
     return 0;
 }

@@ -9,6 +9,9 @@
 #include <sys/wait.h>
 #include <errno.h>
 
+
+char* filtros[10];
+
 char **inputDivide(char *input)
 {
     char **stdi = (char **)malloc(10 * sizeof(char *)); // aloca memória para um array de apontadores para Strings.
@@ -26,8 +29,47 @@ char **inputDivide(char *input)
     return stdi; // retorna o Array de apontadores para Strings
 }
 
+void free_filtros(){
+	    
+	    int fd = open("bin/clientetoserver", O_WRONLY); // escreve para o fifo
+	    
+	    char buffer[1024];
+	    strcat(buffer, "free_filtros");
+	    strcat(buffer, " ");
+	    char pid[10];
+	    sprintf(pid, " %d ", getpid());
+	    strcat(buffer, pid);
+	    int a = 0;
+	    while(filtros[a] != NULL){
+		    char* string = filtros[a];
+		    strcat(buffer, string);
+		    strcat(buffer, " ");
+		    a++;
+	    }
+	    
+	    if(write(fd, buffer , strlen(buffer)) == -1){
+		    write(1, "Could Not Write To The FIFO 'clientetoserver'\n", 26);
+	   	    return;
+	    }	
+}
+
+void handler_signals(int signal){
+	if(signal == SIGUSR1){
+		write(1, "Transform Done\n", 16);
+		free_filtros();
+	}
+	else if (signal == SIGUSR2){
+		write(1, "Transform Error\n", 17);
+		free_filtros();
+	}
+	kill(getpid(), SIGKILL);
+}
+
 
 int main (int argc, char * argv[]){
+    
+    signal(SIGUSR1, handler_signals);
+    signal(SIGUSR2, handler_signals);
 
     if(argc == 1){ // comando de exemplificação de exemplos
 	int p;	  
@@ -70,6 +112,9 @@ int main (int argc, char * argv[]){
 	    }
 
 	    char* comand = strdup(argv[1]); 
+	    char pid2[10];
+	    sprintf(pid2, "%d", getpid());
+	    char* pid = strdup(pid2);
 	    char* finput = strdup(argv[2]);
 	    char* foutput = strdup(argv[3]); 
 
@@ -77,14 +122,21 @@ int main (int argc, char * argv[]){
 	    char resposta[2000];
 					        	// vamos juntar todos os comandos numa string para escrever no fifo
 	    strcat(resposta, comand);
+	    strcat(strcat(resposta, " "), pid);
 	    strcat(strcat(resposta, " "), finput);
 	    strcat(strcat(resposta, " "),foutput);
 	    int i = 4;
 	    while(i < argc ){
 		    if(argv[i] != NULL){		
-		    strcat(strcat(resposta, " "), argv[i]);		
+		    strcat(strcat(resposta, " "), argv[i]);
+		    filtros[i-4] = argv[i];
 		    }
 		    i++;
+	    }
+	    int a = i - 4;
+	    while(a < 10){
+		    filtros[a] = NULL;
+		    a++;	
 	    }
 	    
 	    int fd = open("bin/clientetoserver", O_WRONLY); // escreve para o fifo
@@ -93,12 +145,12 @@ int main (int argc, char * argv[]){
 	   	    return 0;
 	    }
 	    close(fd);
+	    pause();
     }
     else {
 	 int p = write(1, "Comando Inválido\n", 19);
 	 if (p == -1) return 0;
     }
 	
-
     return 0;
 }
